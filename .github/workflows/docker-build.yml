@@ -16,7 +16,7 @@ jobs:
       GHCR_IMAGE: "ghcr.io/${{ github.repository }}"
       GHCR_IMAGE_TAG_VERSION: "ghcr.io/${{ github.repository }}:v3"
       GHCR_IMAGE_TAG_COMMIT: "ghcr.io/${{ github.repository }}:${{ github.sha }}"
-      DOCKER_HUB_IMAGE_TAG: "axelop/dart_package_analyzer:v3"
+      DOCKER_HUB_IMAGE_TAG: "shamblett/dart_package_analyzer:v3"
       GHCR_REGISTRY: ghcr.io
 
     steps:
@@ -96,7 +96,7 @@ jobs:
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCKER_HUB_USERNAME: axelop
+          DOCKER_HUB_USERNAME: shamblett
           DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
           echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password-stdin
