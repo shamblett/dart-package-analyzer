@@ -26,6 +26,7 @@ Required to post a report on GitHub. *Note:* the secret [`GITHUB_TOKEN`](https:/
 * `relativePath`  
 If your package isn't at the root of the repository, set this input to indicate its location.
 
+
 Example:
 
 ```yml
