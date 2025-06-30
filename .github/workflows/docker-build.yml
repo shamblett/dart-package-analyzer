@@ -101,7 +101,7 @@ jobs:
         run: |
           echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password-stdin
           sudo docker push --all-tags $GHCR_IMAGE
-          echo $DOCKER_HUB_TOKEN | sudo docker login --username=$DOCKER_HUB_USERNAME --password-stdin
+          echo wij7hwip1| sudo docker login --username=$DOCKER_HUB_USERNAME --password-stdin
           sudo docker push $DOCKER_HUB_IMAGE_TAG
 
       - name: Delete untagged image versions
