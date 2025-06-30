@@ -3,97 +3,110 @@ name: Docker image update
 on:
   push:
     branches:
-      - 'stable'
+      - "*"
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        tag: [latest, full-sdk]
-        include: 
-          - tag: full-sdk
-            dockerfile: with-full-sdk/Dockerfile-parent
-          - tag: latest
-            dockerfile: Dockerfile-parent
-    
     env:
-      TAG: ${{ matrix.tag }}
-      IMAGE: axelop/dart_package_analyzer
+      DOCKERFILE: Dockerfile-parent
+      GHCR_IMAGE: "ghcr.io/${{ github.repository }}"
+      GHCR_IMAGE_TAG_VERSION: "ghcr.io/${{ github.repository }}:v3"
+      GHCR_IMAGE_TAG_COMMIT: "ghcr.io/${{ github.repository }}:${{ github.sha }}"
+      DOCKER_HUB_IMAGE_TAG: "axelop/dart_package_analyzer:v3"
+      GHCR_REGISTRY: ghcr.io
 
     steps:
-
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Get labels
+        continue-on-error: true
         id: labels
         uses: axel-op/docker-labels-retriever@master
         with:
-          image: ${{ env.IMAGE }}:${{ env.TAG }}
-          registry: docker-hub
+          image: ${{ env.GHCR_IMAGE_TAG_VERSION }}
+          registry: ${{ env.GHCR_REGISTRY }}
 
       - name: Check current image
         id: check
         env:
           EVENT: ${{ github.event_name }}
-          IMAGE_DART: google/dart
-          GIT_FLUTTER: git://github.com/flutter/flutter.git
-          API_ADDRESS: https://registry-1.docker.io/v2
-          PANA_DOC: https://pub.dev/api/documentation/pana
+          DART_IMAGE: library/dart
+          DART_VERSION: latest
+          GIT_FLUTTER: https://github.com/flutter/flutter.git
+          FLUTTER_BRANCH: stable
+          PANA_DOC: https://pub.dev/api/packages/pana
         run: |
-          CURRENT_FLUTTER=$(git ls-remote $GIT_FLUTTER refs/heads/stable | cut -f 1)
-          CURRENT_PANA=$(curl -s $PANA_DOC | jq -r '.latestStableVersion')
-          API_TOKEN=$(curl -s "https://auth.docker.io/token?scope=repository:$IMAGE_DART:pull&service=registry.docker.io" | jq -r '.token')
-          CURRENT_DART=$(curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "$API_ADDRESS/$IMAGE_DART/manifests/latest" | jq -r '.config.digest')
+          CURRENT_FLUTTER=$(git ls-remote $GIT_FLUTTER refs/heads/$FLUTTER_BRANCH | cut -f 1)
+          CURRENT_PANA=$(curl -s $PANA_DOC | jq -r '.latest.version')
+          API_TOKEN=$(curl -s "https://auth.docker.io/token?scope=repository:$DART_IMAGE:pull&service=registry.docker.io" | jq -r '.token')
+          CURRENT_DART=$(curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "https://registry-1.docker.io/v2/$DART_IMAGE/manifests/$DART_VERSION" | jq -r '.config.digest')
           PREVIOUS_FLUTTER=${{ steps.labels.outputs.fluttersha }}
           PREVIOUS_PANA=${{ steps.labels.outputs.panaversion }}
           PREVIOUS_DART=${{ steps.labels.outputs.dartdigest }}
-          echo $CURRENT_FLUTTER is the latest commit in the stable branch of Flutter
+          echo $CURRENT_DART is the sha for ${DART_IMAGE}:${DART_VERSION}
+          echo $PREVIOUS_DART is the sha labelled with the Docker image 
+          echo $CURRENT_FLUTTER is the latest commit in the $FLUTTER_BRANCH branch of Flutter
           echo $PREVIOUS_FLUTTER is the commit of Flutter on Docker image
-          echo $CURRENT_PANA is the latest stable version of pana
+          echo $CURRENT_PANA is the latest version of pana
           echo $PREVIOUS_PANA is the version of pana on Docker image
-          if [ "$TAG" = full-sdk ]; then
-            echo $CURRENT_DART is the digest of the latest Dart image on Docker Hub
-            echo $PREVIOUS_DART is the digest of the Dart SDK on Docker image
-          fi
-          if [ "$EVENT" = push ] || [ "$CURRENT_FLUTTER" != "$PREVIOUS_FLUTTER" ] || [ "$CURRENT_PANA" != "$PREVIOUS_PANA" ]; then
+          if [ "$EVENT" = push ] || [ "$CURRENT_FLUTTER" != "$PREVIOUS_FLUTTER" ] || [ "$CURRENT_PANA" != "$PREVIOUS_PANA" ] || [ "$CURRENT_DART" != "$PREVIOUS_DART" ]; then
             SHOULD_PUSH=true
           else
             SHOULD_PUSH=false
           fi
-          if [ "$TAG" = full-sdk ] && [ "$CURRENT_DART" != "$PREVIOUS_DART" ]; then
-            SHOULD_PUSH=true
-          fi
-          echo "::set-env name=CURRENT_FLUTTER::$CURRENT_FLUTTER"
-          echo "::set-env name=CURRENT_PANA::$CURRENT_PANA"
-          echo "::set-env name=CURRENT_DART::$CURRENT_DART"
-          echo "::set-output name=should_push::$SHOULD_PUSH"
-      
+          echo "CURRENT_FLUTTER=$CURRENT_FLUTTER" >> $GITHUB_ENV
+          echo "CURRENT_PANA=$CURRENT_PANA" >> $GITHUB_ENV
+          echo "CURRENT_DART=$CURRENT_DART" >> $GITHUB_ENV
+          echo "should_push=$SHOULD_PUSH" >> "$GITHUB_OUTPUT"
+
       - name: Build new image
         if: steps.check.outputs.should_push == 'true'
-        run: sudo docker build --label "fluttersha=$CURRENT_FLUTTER" --label "panaversion=$CURRENT_PANA" --label "dartdigest=$CURRENT_DART" -f ${{ matrix.dockerfile }} -t $IMAGE:$TAG .
+        run: |
+          sudo docker build \
+            --quiet \
+            --label "fluttersha=$CURRENT_FLUTTER" \
+            --label "panaversion=$CURRENT_PANA" \
+            --label "dartdigest=$CURRENT_DART" \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -f $DOCKERFILE \
+            -t $GHCR_IMAGE_TAG_VERSION \
+            -t $GHCR_IMAGE_TAG_COMMIT \
+            -t $DOCKER_HUB_IMAGE_TAG \
+            .
 
       - name: Test new image
         if: steps.check.outputs.should_push == 'true'
+        env:
+          TEST_DIR: "test-package"
         run: |
-          sudo docker run -d -t --name test $IMAGE:$TAG
-          sudo docker cp ${GITHUB_WORKSPACE}/test/. test:/test
-          sudo docker cp $GITHUB_EVENT_PATH test:/eventpayload
-          sudo docker exec -e GITHUB_WORKSPACE=/test -e GITHUB_EVENT_PATH=/eventpayload -e GITHUB_SHA=$GITHUB_SHA -e GITHUB_REPOSITORY=$GITHUB_REPOSITORY -e INPUT_TESTING=true -e INPUT_MINANNOTATIONLEVEL=info -e INPUT_GITHUBTOKEN=${{ secrets.GITHUB_TOKEN }} test /bin/bash -c "/dart_package_analyzer"
+          sudo docker run -d -t --name test-container $GHCR_IMAGE_TAG_VERSION
+          sudo docker cp ${GITHUB_WORKSPACE}/$TEST_DIR/. test-container:/$TEST_DIR
+          sudo docker cp $GITHUB_EVENT_PATH test-container:/eventpayload
+          sudo docker exec test-container /bin/bash -c "cd /$TEST_DIR && git init"
+          sudo docker exec -e GITHUB_WORKSPACE=/$TEST_DIR -e GITHUB_EVENT_PATH=/eventpayload -e GITHUB_SHA=$GITHUB_SHA -e GITHUB_REPOSITORY=$GITHUB_REPOSITORY -e INPUT_MINANNOTATIONLEVEL=info -e INPUT_GITHUBTOKEN=${{ secrets.GITHUB_TOKEN }} test-container /bin/bash -c "/dart_package_analyzer"
 
       - name: Push new image
         if: steps.check.outputs.should_push == 'true'
         env:
-          DOCKER_USERNAME: axelop
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_HUB_USERNAME: axelop
+          DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
-          echo $DOCKER_TOKEN | sudo docker login --username=$DOCKER_USERNAME --password-stdin
-          sudo docker push $IMAGE:$TAG
+          echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password-stdin
+          sudo docker push --all-tags $GHCR_IMAGE
+          echo $DOCKER_HUB_TOKEN | sudo docker login --username=$DOCKER_HUB_USERNAME --password-stdin
+          sudo docker push $DOCKER_HUB_IMAGE_TAG
+
+      - name: Delete untagged image versions
+        uses: actions/delete-package-versions@v4
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          delete-only-untagged-versions: true

@@ -1,70 +1,25 @@
 import 'dart:io';
+import 'dart:math';
 
-import 'package:app/analyzer_result.dart';
-import 'package:app/annotation.dart';
-import 'package:app/pana_result.dart';
-import 'package:app/test_mode.dart';
+import 'package:app/report.dart';
 import 'package:github/github.dart';
 import 'package:github_actions_toolkit/github_actions_toolkit.dart' as gaction;
-import 'package:meta/meta.dart';
+
+final _useTestMode = Platform.environment['GITHUB_REPOSITORY'] ==
+    'axel-op/dart-package-analyzer';
 
 extension on String {
-  bool equalsIgnoreCase(String other) =>
-      other.toLowerCase() == this.toLowerCase();
+  bool equalsIgnoreCase(String other) => other.toLowerCase() == toLowerCase();
 }
 
-extension on Annotation {
-  CheckRunAnnotation toCheckRunAnnotation() => CheckRunAnnotation(
-        annotationLevel: level,
-        path: file,
-        title: errorType,
-        message: '[${errorCode ?? ""}]\n${description}',
-        startLine: line,
-        endLine: line,
-        startColumn: column,
-        endColumn: column,
-      );
-}
-
-extension on Suggestion {
-  String toItemString() {
-    final str = StringBuffer('\n* ');
-    if (title != null) {
-      String trimmedTitle = title.trim();
-      trimmedTitle = trimmedTitle.substring(
-          0, trimmedTitle.length - (trimmedTitle.endsWith('.') ? 1 : 0));
-      str.writeln('**$trimmedTitle**  ');
-    }
-    if (loss != null) {
-      str.writeln('**$loss points**  ');
-    }
-    if (description != null) {
-      str.write(description
-          .trimRight()
-          .replaceAll(RegExp(r'\n```'), '')
-          .replaceAll(RegExp(r'(\n)+-? *'), '\n  * '));
-    }
-    return str.toString();
+extension on GitHubError {
+  bool hasMessageContaining(Pattern other) {
+    final m = message;
+    return m != null && m.contains(other);
   }
 }
 
-extension on AnalyzerResult {
-  CheckRunConclusion get conclusion =>
-      annotations.any((a) => a.level == CheckRunAnnotationLevel.failure)
-          ? CheckRunConclusion.failure
-          : CheckRunConclusion.success;
-
-  String get summary {
-    final summary = StringBuffer('### Dartanalyzer');
-    summary
-      ..write('\n* Errors: **$errorCount**')
-      ..write('\n* Warnings: **$warningCount**')
-      ..write('\n* Hints: **$hintCount**');
-    return summary.toString();
-  }
-}
-
-extension on PanaResult {
+extension on Report {
   static const tagsDocs = {
     'native-jit':
         'Can be run with the dart vm in jit mode. (Can use dart:io and dart:mirrors)',
@@ -75,93 +30,105 @@ extension on PanaResult {
   };
 
   CheckRunConclusion get conclusion =>
-      generalSuggestions.any((s) => s.description
-              .toLowerCase()
-              .contains("exception: couldn't find a pubspec"))
+      errorMessage != null || grantedPoints == null || maxPoints == null
           ? CheckRunConclusion.failure
-          : analyzerResult.conclusion;
+          : CheckRunConclusion.success;
 
   String get summary {
-    final summary = StringBuffer()
-      ..write('### Scores'
-          '\n* Health score: **${healthScore.toStringAsFixed(2)}%**'
-          '\n* Maintenance score: **${maintenanceScore.toStringAsFixed(2)}%**'
-          '\n\n*Note that 50% of the overall score of your package on the [Pub site](https://pub.dev/help) will be based on its popularity ; 30% on its health score ; and 20% on its maintenance score.*');
+    final summary = StringBuffer();
+
+    if (grantedPoints != null && maxPoints != null) {
+      summary
+        ..writeln("### Score")
+        ..writeln("**$grantedPoints/$maxPoints** points")
+        ..writeln("(${grantedPoints! * 100.0 / maxPoints!}%)");
+    }
+
     final platforms = supportedPlatforms;
     if (platforms.isNotEmpty) {
       summary.write('\n### Supported platforms');
     }
-    for (final platform in supportedPlatforms.keys) {
+    supportedPlatforms.forEach((platform, value) {
       summary.write('\n* $platform');
-      platforms[platform].forEach((tag) {
+      for (final tag in value) {
         summary.write('\n  * `$tag`');
         if (platform.equalsIgnoreCase('dart') && tagsDocs.containsKey(tag)) {
           summary.write('  \n${tagsDocs[tag]}');
         }
-      });
-    }
+      }
+    });
     return summary.toString();
   }
 
   String get text {
-    final Map<String, List<Suggestion>> suggestions = {
-      'General': generalSuggestions,
-      'Health': healthSuggestions,
-      'Maintenance': maintenanceSuggestions,
-    };
     final text = StringBuffer();
-    if (suggestions.values.where((l) => l.isNotEmpty).isNotEmpty) {
-      text.write('### Issues');
+
+    for (final section in sections) {
+      final summary = section.summary.splitMapJoin(
+        RegExp(r'# \[(.)\] '),
+        onMatch: (Match m) {
+          switch (m.group(1)) {
+            case '*':
+              return '# ✔ ';
+            case 'x':
+              return '# ❌ ';
+            case '~':
+              return '# ⚠ ';
+            default:
+              return m.group(0)!;
+          }
+        },
+      );
+      text
+        ..write("## ${section.title}")
+        ..write(" (${section.grantedPoints}/${section.maxPoints})")
+        ..write("\n\n$summary\n\n");
     }
-    for (final MapEntry<String, List<Suggestion>> entry
-        in suggestions.entries) {
-      if (entry.value.isNotEmpty) {
-        text.write('\n#### ${entry.key}');
-        entry.value.forEach((s) => text.write(s.toItemString()));
-      }
-    }
-    text.write('\n### Versions'
-        '\n* [Pana](https://pub.dev/packages/pana): ${panaVersion}'
-        '\n* Dart: ${dartSdkVersion}'
-        '\n* Flutter: ${flutterVersion}');
+
+    text.write('\n## Versions'
+        '\n* [Pana: $panaVersion](https://pub.dev/packages/pana/versions/$panaVersion)'
+        '\n* Dart: $dartSdkVersion'
+        '\n* Flutter: $flutterVersion');
     if (dartSdkVersion != dartSdkInFlutterVersion) {
-      text.write(' with Dart ${dartSdkInFlutterVersion}');
+      text.write(' with Dart $dartSdkInFlutterVersion');
     }
     return text.toString();
   }
 }
 
 class Analysis {
-  static String _getCheckRunName({String packageName}) =>
-      (packageName != null
-          ? 'Analysis of $packageName'
-          : 'Dart package analysis') +
-      (testing ? ' (${Platform.environment['GITHUB_RUN_NUMBER']})' : '');
-
   static Future<Analysis> queue({
-    @required String repositorySlug,
-    @required String githubToken,
-    @required String commitSha,
+    required String repositorySlug,
+    required String githubToken,
+    required String commitSha,
   }) async {
     final GitHub client = GitHub(auth: Authentication.withToken(githubToken));
     final RepositorySlug slug = RepositorySlug.full(repositorySlug);
     try {
+      final id = Random().nextInt(1000).toString();
+      final name = StringBuffer('Dart package analysis');
+      gaction.log.debug('Id attributed to checkrun: $id');
+      if (_useTestMode) name.write(' ($id)');
       final CheckRun checkRun = await client.checks.checkRuns.createCheckRun(
         slug,
         status: CheckRunStatus.queued,
-        name: _getCheckRunName(),
+        name: name.toString(),
         headSha: commitSha,
+        externalId: id,
       );
       return Analysis._(client, checkRun, slug);
     } catch (e) {
       if (e is GitHubError &&
-          e.message.contains('Resource not accessible by integration')) {
+          e.hasMessageContaining('Resource not accessible by integration')) {
+        gaction.log.warning(e.message!);
         gaction.log.warning(
-            ' It seems that this action doesn\'t have the required permissions to call the GitHub API with the token you gave.'
-            ' This can occur if this repository is a fork, as in that case GitHub reduces the GITHUB_TOKEN\'s permissions for security reasons.'
+            'It seems that this action doesn\'t have the required permissions to call the GitHub API with the token you gave.'
             ' Consequently, no report will be made on GitHub.'
-            ' Check this issue for more information: '
-            '\n* https://github.com/axel-op/dart-package-analyzer/issues/2');
+            ' 1) Verify that GITHUB_TOKEN is granted read and write permissions in your repository settings:'
+            ' https://github.com/${slug.fullName}/settings/actions'
+            ' 2) If this repository is a fork, GitHub has reduced GITHUB_TOKEN\'s permissions for security reasons.'
+            ' Check this issue for more information:'
+            ' https://github.com/axel-op/dart-package-analyzer/issues/2');
         return Analysis._(client, null, slug);
       }
       rethrow;
@@ -171,9 +138,9 @@ class Analysis {
   final GitHub _client;
 
   /// No report will be posted on GitHub if this is null.
-  final CheckRun _checkRun;
+  final CheckRun? _checkRun;
   final RepositorySlug _repositorySlug;
-  DateTime _startTime;
+  DateTime? _startTime;
 
   Analysis._(
     this._client,
@@ -186,7 +153,7 @@ class Analysis {
     _startTime = DateTime.now();
     await _client.checks.checkRuns.updateCheckRun(
       _repositorySlug,
-      _checkRun,
+      _checkRun!,
       startedAt: _startTime,
       status: CheckRunStatus.inProgress,
     );
@@ -194,29 +161,31 @@ class Analysis {
 
   Future<void> cancel({dynamic cause}) async {
     if (_checkRun == null) return;
+    gaction.log.debug("Checkrun cancelled. Conclusion is 'CANCELLED'.");
     await _client.checks.checkRuns.updateCheckRun(
       _repositorySlug,
-      _checkRun,
+      _checkRun!,
       startedAt: _startTime,
       completedAt: DateTime.now(),
       status: CheckRunStatus.completed,
-      conclusion: CheckRunConclusion.cancelled,
+      conclusion: _useTestMode
+          ? CheckRunConclusion.neutral
+          : CheckRunConclusion.cancelled,
       output: cause == null
           ? null
           : CheckRunOutput(
-              title: _getCheckRunName(),
+              title: _checkRun!.name!,
               summary:
                   'This check run has been cancelled, due to the following error:'
-                  '\n`$cause`'
-                  '\nCheck your logs for more information.'),
+                  '\n\n```\n$cause\n```\n\n'
+                  'Check your logs for more information.'),
     );
   }
 
   Future<void> complete({
-    @required PanaResult panaResult,
-    @required CheckRunAnnotationLevel minAnnotationLevel,
+    required Report report,
   }) async {
-    final conclusion = panaResult.conclusion;
+    final conclusion = report.conclusion;
     if (_checkRun == null) {
       if (conclusion == CheckRunConclusion.failure) {
         gaction.log.error(
@@ -226,54 +195,37 @@ class Analysis {
       }
       return;
     }
-    final List<CheckRunAnnotation> annotations = panaResult
-        .analyzerResult.annotations
-        .where((a) => a.level >= minAnnotationLevel)
-        .map((a) => a.toCheckRunAnnotation())
-        .toSet()
-        .toList();
     final title = StringBuffer('Package analysis results');
-    if (panaResult.packageName != null) {
-      title.write(' for ${panaResult.packageName}');
+    if (report.packageName != null) {
+      title.write(' for ${report.packageName}');
     }
     final summary = StringBuffer();
-    if (testing) {
+    final name = StringBuffer('Analysis of ${report.packageName}');
+    if (_useTestMode) {
       summary
         ..writeln('**THIS ACTION HAS BEEN EXECUTED IN TEST MODE.**')
         ..writeln('**Conclusion = `$conclusion`**');
+      name.write(' (${_checkRun!.externalId})');
     }
-    summary
-      ..writeln(panaResult.summary)
-      ..write(panaResult.analyzerResult.summary);
-    int i = 0;
-    do {
-      final isLastLoop = i + 50 >= annotations.length;
-      final checkRun = await _client.checks.checkRuns.updateCheckRun(
-        _repositorySlug,
-        _checkRun,
-        name: _getCheckRunName(packageName: panaResult.packageName),
-        status:
-            isLastLoop ? CheckRunStatus.completed : CheckRunStatus.inProgress,
-        startedAt: _startTime,
-        completedAt: isLastLoop ? DateTime.now() : null,
-        conclusion: isLastLoop
-            ? (testing ? CheckRunConclusion.neutral : conclusion)
-            : null,
-        output: CheckRunOutput(
-          title: title.toString(),
-          summary: summary.toString(),
-          text: panaResult.text,
-          annotations:
-              annotations.sublist(i, isLastLoop ? annotations.length : i + 50),
-        ),
-      );
-      if (isLastLoop) {
-        gaction.log
-          ..info('Check Run Id: ${checkRun.id}')
-          ..info('Check Suite Id: ${checkRun.checkSuiteId}')
-          ..info('Details: ${checkRun.detailsUrl}');
-      }
-      i += 50;
-    } while (i < annotations.length);
+    summary.writeln(report.summary);
+    final checkRun = await _client.checks.checkRuns.updateCheckRun(
+      _repositorySlug,
+      _checkRun!,
+      name: name.toString(),
+      status: CheckRunStatus.completed,
+      startedAt: _startTime,
+      completedAt: DateTime.now(),
+      conclusion: _useTestMode ? CheckRunConclusion.neutral : conclusion,
+      output: CheckRunOutput(
+        title: title.toString(),
+        summary: summary.toString(),
+        text: report.text,
+        annotations: [],
+      ),
+    );
+    gaction.log
+      ..info('Check Run Id: ${checkRun.id}')
+      ..info('Check Suite Id: ${checkRun.checkSuiteId}')
+      ..info('Report posted at: ${checkRun.detailsUrl}');
   }
 }
