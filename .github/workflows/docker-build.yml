@@ -96,8 +96,8 @@ jobs:
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCKER_HUB_USERNAME: shamblett1
-          DOCKER_HUB_TOKEN: wij7hwip1
+          DOCKER_HUB_USERNAME: shamblett
+          DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
           echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password-stdin
           sudo docker push --all-tags $GHCR_IMAGE
