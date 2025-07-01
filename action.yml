@@ -45,5 +45,5 @@ outputs:
 
 runs:
   using: "docker"
-  image: "docker://ghcr.io/shamblett1/dart-package-analyzer:v3"
+  image: "docker://ghcr.io/shamblett1/dart_package_analyzer:v3"
   entrypoint: "/dart_package_analyzer"
