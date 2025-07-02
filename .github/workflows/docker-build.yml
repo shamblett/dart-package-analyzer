@@ -99,7 +99,7 @@ jobs:
           DOCKER_HUB_USERNAME: shamblett1
           DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
-          echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password-stdin
+          echo $GHCR_TOKEN | sudo docker login $GHCR_REGISTRY --username=$GHCR_USERNAME --password=$GHCR_TOKEN
           sudo docker push --all-tags $GHCR_IMAGE
           echo $DOCKER_HUB_TOKEN | sudo docker login --username=$DOCKER_HUB_USERNAME --password-stdin
           sudo docker push $DOCKER_HUB_IMAGE_TAG
